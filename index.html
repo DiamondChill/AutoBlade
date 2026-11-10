@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Four Bars</title>
+<meta name="description" content="Hear a four-chord progression in C major and name it in four guesses.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..800;1,6..96,400..800&family=Instrument+Sans:wght@400..700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
+  <header class="masthead">
+    <p class="eyebrow">Ear training &middot; Key of C major</p>
+    <h1>Four Bars</h1>
+    <p class="lede">Four chords play. Name the progression in four guesses.</p>
+  </header>
+
+  <div class="transport">
+    <button type="button" id="play-btn" class="btn btn-primary" aria-pressed="false">
+      <span class="btn-icon" id="play-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8L13.2 8z"/></svg></span>
+      <span id="play-label">Play progression</span>
+    </button>
+    <button type="button" id="tonic-btn" class="btn btn-quiet" title="Shortcut: T">Hear the <span class="rn">I</span> chord</button>
+  </div>
+
+  <section class="board" id="board" aria-label="Your guesses">
+    <div class="line beats" aria-hidden="true">
+      <span></span>
+      <div class="bars">
+        <span class="beat">1</span>
+        <span class="beat">2</span>
+        <span class="beat">3</span>
+        <span class="beat">4</span>
+      </div>
+      <span></span>
+    </div>
+  </section>
+
+  <p class="status" id="status"></p>
+  <p class="visually-hidden" id="announce" aria-live="polite"></p>
+
+  <section class="result" id="result" aria-live="polite" hidden>
+    <div class="result-head">
+      <h2 class="result-title" id="result-title"></h2>
+      <p class="result-sub" id="result-sub"></p>
+    </div>
+    <div class="answer" id="answer"></div>
+    <button type="button" class="btn btn-primary" id="next-btn">Next progression</button>
+  </section>
+
+  <section class="keypad" id="keypad" aria-label="Chord keys"></section>
+
+  <section class="stats" aria-label="Your record">
+    <div class="stat"><span class="stat-value" id="stat-played">0</span><span class="stat-label">Played</span></div>
+    <div class="stat"><span class="stat-value" id="stat-winrate">0</span><span class="stat-label">Win %</span></div>
+    <div class="stat"><span class="stat-value" id="stat-streak">0</span><span class="stat-label">Streak</span></div>
+    <div class="stat"><span class="stat-value" id="stat-best">0</span><span class="stat-label">Best streak</span></div>
+  </section>
+
+  <details class="help" open>
+    <summary>How to play</summary>
+    <div class="help-body">
+      <p>Each round, four chords from C major play, one per bar. They come from the first six degrees of the scale:</p>
+      <dl class="pool">
+        <div><dt>I</dt><dd>C <span>C E G</span></dd></div>
+        <div><dt>ii</dt><dd>Dm <span>D F A</span></dd></div>
+        <div><dt>iii</dt><dd>Em <span>E G B</span></dd></div>
+        <div><dt>IV</dt><dd>F <span>F A C</span></dd></div>
+        <div><dt>V</dt><dd>G <span>G B D</span></dd></div>
+        <div><dt>vi</dt><dd>Am <span>A C E</span></dd></div>
+      </dl>
+      <p>Enter a numeral for each bar (1 for I, 2 for ii, and so on), then submit. You get four guesses. After each one the bars change colour:</p>
+      <ul class="legend">
+        <li><span class="swatch" data-state="correct">V</span>Right chord in the right bar.</li>
+        <li><span class="swatch" data-state="present">V</span>The chord is in the progression, in a different bar.</li>
+        <li><span class="swatch" data-state="absent">V</span>The chord isn’t in the progression, or you used it more times than it appears.</li>
+      </ul>
+      <p>The same chord never plays in two bars in a row, but it can come back later. Replay the progression as often as you like, and use the play button beside a past guess to hear how it compares.</p>
+      <p class="shortcuts">Keyboard: <kbd>1</kbd>–<kbd>6</kbd> enter a chord, <kbd>Backspace</kbd> deletes, <kbd>Enter</kbd> submits, <kbd>Space</kbd> plays or stops, <kbd>T</kbd> plays the I chord.</p>
+    </div>
+  </details>
+</main>
+<script src="js/logic.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>

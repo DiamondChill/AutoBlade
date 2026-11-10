@@ -1,0 +1,10 @@
+{
+  "name": "four-bars",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A Wordle-style ear-training game: hear a four-chord progression in C major and name it in four guesses.",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test"
+  }
+}
