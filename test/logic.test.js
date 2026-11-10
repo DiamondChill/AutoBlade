@@ -95,3 +95,64 @@ test('voicing keeps chord tones between G3 and F#4 with the root in the bass', (
   assert.equal(L.bassNote(C.rootPc), 48); // C3
   assert.equal(L.midiToFreq(69), 440);
 });
+
+// ---- Key mode -----------------------------------------------------------------
+
+test('there are twelve major keys and every one spells its six chords', () => {
+  assert.equal(L.MAJOR_KEYS.length, 12);
+  L.MAJOR_KEYS.forEach((name, pc) => {
+    assert.equal(L.pitchClass(name), pc);
+    const chords = L.diatonicChords(name);
+    assert.deepEqual(chords.map((c) => c.quality), ['major', 'minor', 'minor', 'major', 'major', 'minor']);
+    assert.equal(chords[0].name, name);
+  });
+  assert.deepEqual(L.diatonicChords('F#').map((c) => c.name), ['F#', 'G#m', 'A#m', 'B', 'C#', 'D#m']);
+  assert.deepEqual(L.diatonicChords('Db').map((c) => c.name), ['Db', 'Ebm', 'Fm', 'Gb', 'Ab', 'Bbm']);
+});
+
+test('majorScalePcs lists the notes of a major scale', () => {
+  assert.deepEqual(L.majorScalePcs(0), [0, 2, 4, 5, 7, 9, 11]);  // C D E F G A B
+  assert.deepEqual(L.majorScalePcs(7), [7, 9, 11, 0, 2, 4, 6]);  // G A B C D E F#
+});
+
+test('scoreKeyGuess: green for the key, yellow if the note is in its scale, gray if not', () => {
+  const C = 0, Db = 1, D = 2, F = 5, Fs = 6, G = 7, Bb = 10;
+  assert.equal(L.scoreKeyGuess(C, C), 'correct');
+  assert.equal(L.scoreKeyGuess(G, C), 'present');  // G is in C major
+  assert.equal(L.scoreKeyGuess(D, C), 'present');
+  assert.equal(L.scoreKeyGuess(Fs, C), 'absent');  // F# is not in C major
+  assert.equal(L.scoreKeyGuess(Bb, C), 'absent');
+  assert.equal(L.scoreKeyGuess(F, G), 'absent');   // G major has F#, not F
+  assert.equal(L.scoreKeyGuess(Fs, G), 'present');
+  assert.equal(L.scoreKeyGuess(Fs, Db), 'present'); // F# sounds the same as Gb, which is in Db major
+  assert.equal(L.scoreKeyGuess(C, Db), 'present');
+  assert.equal(L.scoreKeyGuess(D, Db), 'absent');
+});
+
+test('randomProgression can start on the I chord', () => {
+  for (let i = 0; i < 2000; i++) {
+    const p = L.randomProgression({ startOnTonic: true });
+    assert.equal(p.length, 4);
+    assert.equal(p[0], 1);
+    assert.notEqual(p[1], 1);
+  }
+  assert.deepEqual(L.randomProgression({ startOnTonic: true, rng: () => 0 }), [1, 2, 1, 2]);
+});
+
+test('randomKey covers all twelve keys', () => {
+  const seen = new Set();
+  for (let i = 0; i < 2000; i++) seen.add(L.randomKey());
+  assert.deepEqual([...seen].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+});
+
+test('bestMarks keeps the best mark per key', () => {
+  assert.deepEqual(L.bestMarks([[7, 'present'], [6, 'absent'], [7, 'correct'], [6, 'absent']]), { 6: 'absent', 7: 'correct' });
+});
+
+test('prettyName uses real sharp and flat signs', () => {
+  assert.equal(L.prettyName('Bb'), 'B♭');
+  assert.equal(L.prettyName('F#m'), 'F♯m');
+  assert.equal(L.prettyName('Ebm'), 'E♭m');
+  assert.equal(L.prettyName('Bdim'), 'Bdim');
+  assert.equal(L.prettyName('C'), 'C');
+});

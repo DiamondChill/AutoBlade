@@ -17,6 +17,8 @@
   const NATURAL_PC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
   const MAJOR_STEPS = [0, 2, 4, 5, 7, 9, 11];
   const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+  // The twelve major keys by pitch class, spelled the way they are usually written.
+  const MAJOR_KEYS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 
   const mod = (n, m) => ((n % m) + m) % m;
 
@@ -33,6 +35,17 @@
     let diff = mod(pc - NATURAL_PC[letter], 12);
     if (diff > 6) diff -= 12;
     return letter + (diff > 0 ? '#'.repeat(diff) : 'b'.repeat(-diff));
+  }
+
+  const pitchClass = (name) => parseNote(name).pc;
+
+  /** Pitch classes of the major scale on a tonic pitch class. */
+  const majorScalePcs = (tonicPc) => MAJOR_STEPS.map((step) => mod(tonicPc + step, 12));
+
+  /** Display form of a note or chord name: 'Bb' -> 'B♭', 'F#m' -> 'F♯m'. */
+  function prettyName(name) {
+    return name.replace(/^([A-G])(#{1,2}|b{1,2})/, (_, letter, acc) =>
+      letter + acc.replace(/#/g, '\u266F').replace(/b/g, '\u266D'));
   }
 
   function majorScale(tonicName) {
@@ -78,17 +91,19 @@
   /**
    * A random progression of scale degrees (1-based).
    * By default the same chord never sounds twice in a row, since a repeated
-   * chord is hard to hear as two separate bars.
+   * chord is hard to hear as two separate bars. With startOnTonic the first
+   * chord is always I, which establishes the key.
    */
   function randomProgression({
     length = SLOTS,
     poolSize = POOL_SIZE,
     allowAdjacentRepeats = false,
+    startOnTonic = false,
     rng = Math.random,
   } = {}) {
     const pool = Array.from({ length: poolSize }, (_, i) => i + 1);
-    const out = [];
-    for (let i = 0; i < length; i++) {
+    const out = startOnTonic ? [1] : [];
+    for (let i = out.length; i < length; i++) {
       const prev = out[i - 1];
       const choices = allowAdjacentRepeats ? pool : pool.filter((d) => d !== prev);
       out.push(choices[Math.floor(rng() * choices.length)]);
@@ -124,18 +139,33 @@
 
   const isSolved = (result) => result.every((s) => s === 'correct');
 
+  /**
+   * Key mode: score a guessed key (pitch class) against the real key.
+   * 'correct' = the right key; 'present' = wrong key, but its tonic note is in
+   * the real key's major scale; 'absent' = that note is not in the scale.
+   * Notes compare by sound, so F# and Gb count as the same note.
+   */
+  function scoreKeyGuess(guessPc, answerPc) {
+    if (guessPc === answerPc) return 'correct';
+    return majorScalePcs(answerPc).includes(guessPc) ? 'present' : 'absent';
+  }
+
+  const randomKey = (rng = Math.random) => Math.floor(rng() * 12);
+
   const RANK = { absent: 1, present: 2, correct: 3 };
+
+  /** Best mark each item has earned, from [item, mark] pairs. */
+  function bestMarks(pairs) {
+    const states = {};
+    for (const [item, s] of pairs) {
+      if (!states[item] || RANK[s] > RANK[states[item]]) states[item] = s;
+    }
+    return states;
+  }
 
   /** Best mark each chord has earned so far, for colouring the keypad. */
   function keyStates(guesses) {
-    const states = {};
-    for (const { degrees, result } of guesses) {
-      degrees.forEach((d, i) => {
-        const s = result[i];
-        if (!states[d] || RANK[s] > RANK[states[d]]) states[d] = s;
-      });
-    }
-    return states;
+    return bestMarks(guesses.flatMap(({ degrees, result }) => degrees.map((d, i) => [d, result[i]])));
   }
 
   /** Place each chord tone in the octave starting at `low` (MIDI), giving smooth voice leading. */
@@ -154,11 +184,18 @@
     SLOTS,
     MAX_GUESSES,
     POOL_SIZE,
+    MAJOR_KEYS,
+    pitchClass,
     majorScale,
+    majorScalePcs,
+    prettyName,
     diatonicChords,
     randomProgression,
     scoreGuess,
     isSolved,
+    scoreKeyGuess,
+    randomKey,
+    bestMarks,
     keyStates,
     voiceChord,
     bassNote,

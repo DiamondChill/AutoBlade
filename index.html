@@ -13,17 +13,22 @@
 <body>
 <main class="app">
   <header class="masthead">
-    <p class="eyebrow">Ear training &middot; Key of C major</p>
+    <p class="eyebrow" id="eyebrow">Ear training &middot; Key of C major</p>
     <h1>Four Bars</h1>
-    <p class="lede">Four chords play. Name the progression in four guesses.</p>
+    <p class="lede" id="lede">Four chords play. Name the progression in four guesses.</p>
   </header>
+
+  <div class="modes" role="group" aria-label="Game mode">
+    <button type="button" class="mode-btn" data-mode="chords" aria-pressed="true">Name the chords</button>
+    <button type="button" class="mode-btn" data-mode="key" aria-pressed="false">Name the key</button>
+  </div>
 
   <div class="transport">
     <button type="button" id="play-btn" class="btn btn-primary" aria-pressed="false">
       <span class="btn-icon" id="play-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8L13.2 8z"/></svg></span>
       <span id="play-label">Play progression</span>
     </button>
-    <button type="button" id="tonic-btn" class="btn btn-quiet" title="Shortcut: T">Hear the <span class="rn">I</span> chord</button>
+    <button type="button" id="ref-btn" class="btn btn-quiet" title="Shortcut: T">Hear the <span class="rn">I</span> chord</button>
   </div>
 
   <section class="board" id="board" aria-label="Your guesses">
@@ -62,7 +67,7 @@
 
   <details class="help" open>
     <summary>How to play</summary>
-    <div class="help-body">
+    <div class="help-body" data-mode="chords">
       <p>Each round, four chords from C major play, one per bar. They come from the first six degrees of the scale:</p>
       <dl class="pool">
         <div><dt>I</dt><dd>C <span>C E G</span></dd></div>
@@ -80,6 +85,16 @@
       </ul>
       <p>The same chord never plays in two bars in a row, but it can come back later. Replay the progression as often as you like, and use the play button beside a past guess to hear how it compares.</p>
       <p class="shortcuts">Keyboard: <kbd>1</kbd>–<kbd>6</kbd> enter a chord, <kbd>Backspace</kbd> deletes, <kbd>Enter</kbd> submits, <kbd>Space</kbd> plays or stops, <kbd>T</kbd> plays the I chord.</p>
+    </div>
+    <div class="help-body" data-mode="key" hidden>
+      <p>Each round, four chords play in a random major key. The first chord is always the key’s I chord. Pick the key on the keyboard and submit. You get four guesses, and each one is marked:</p>
+      <ul class="legend">
+        <li><span class="swatch" data-state="correct">C</span>The right key.</li>
+        <li><span class="swatch" data-state="present">G</span>Wrong key, but that note is in the real key’s scale. If the key is C major, G is yellow.</li>
+        <li><span class="swatch" data-state="absent">F♯</span>Wrong key, and that note isn’t in the real key’s scale. F♯ isn’t in C major, so it’s gray.</li>
+      </ul>
+      <p>Notes count by sound, so F♯ and G♭ are the same note. Use Hear a C as a reference pitch, and the play button beside a past guess to hear the progression in the key you guessed.</p>
+      <p class="shortcuts">Keyboard: <kbd>A</kbd>–<kbd>G</kbd> pick a key, <kbd>←</kbd> <kbd>→</kbd> move it a semitone (E then <kbd>←</kbd> is E♭), <kbd>Backspace</kbd> clears, <kbd>Enter</kbd> submits, <kbd>Space</kbd> plays or stops, <kbd>R</kbd> plays the C.</p>
     </div>
   </details>
 </main>

@@ -1,5 +1,7 @@
 /*
- * Four Bars: board, keypad, input and round flow.
+ * Four Bars: board, keypad, input and round flow for both game modes.
+ *   chords: hear four chords in a set key and name them by Roman numeral.
+ *   key:    hear four chords in a random major key and name the key.
  * Depends on window.FourBarsLogic (js/logic.js) and window.FourBarsAudio (js/audio.js).
  */
 (function () {
@@ -9,24 +11,68 @@
   const { ChordPlayer } = window.FourBarsAudio;
 
   // ---- Settings ------------------------------------------------------------
-  const KEY = 'C';                  // tonic of the major key the chords come from
+  const CHORDS_MODE_KEY = 'C';      // key used by "Name the chords"
   const ALLOW_BACK_TO_BACK = false; // may the same chord sound in two bars in a row?
+  const KEY_MODE_STARTS_ON_I = true; // in "Name the key", open on the I chord to set up the key
   const CHORD_SECONDS = 1.3;        // length of each chord on playback
-  const STATS_KEY = 'four-bars:stats:v1';
+  const STORAGE = {
+    mode: 'four-bars:mode',
+    stats: { chords: 'four-bars:stats:v1', key: 'four-bars:stats:key:v1' },
+  };
 
-  const { SLOTS, MAX_GUESSES } = L;
-  const CHORDS = L.diatonicChords(KEY);
-  const chordAt = (degree) => CHORDS[degree - 1];
+  const { SLOTS, MAX_GUESSES, POOL_SIZE } = L;
+  const MODES = ['chords', 'key'];
+  const FIXED_TONIC = L.pitchClass(CHORDS_MODE_KEY);
+  const REFERENCE_C = { pcs: [0], rootPc: 0 }; // C4 over C3
 
+  const chordCache = new Map([[FIXED_TONIC, L.diatonicChords(CHORDS_MODE_KEY, POOL_SIZE)]]);
+  function chordsIn(tonic) {
+    if (!chordCache.has(tonic)) chordCache.set(tonic, L.diatonicChords(L.MAJOR_KEYS[tonic], POOL_SIZE));
+    return chordCache.get(tonic);
+  }
+  const chordsOf = (tonic, degrees) => degrees.map((d) => chordsIn(tonic)[d - 1]);
+  const keyName = (pc) => L.prettyName(L.MAJOR_KEYS[pc]);
+  const mod12 = (n) => ((n % 12) + 12) % 12;
+
+  const COPY = {
+    chords: {
+      eyebrow: `Ear training · Key of ${L.prettyName(CHORDS_MODE_KEY)} major`,
+      lede: 'Four chords play. Name the progression in four guesses.',
+      reference: 'Hear the <span class="rn">I</span> chord',
+      referenceTitle: 'Shortcut: T',
+    },
+    key: {
+      eyebrow: 'Ear training · Any major key',
+      lede: 'Four chords play in a mystery key. Name the key in four guesses.',
+      reference: 'Hear a C',
+      referenceTitle: 'Plays a reference C. Shortcut: R',
+    },
+  };
   const TILE_WORDS = { correct: 'right bar', present: 'in another bar', absent: 'not in the progression' };
-  const KEY_WORDS = { correct: 'found in its bar', present: 'in the progression', absent: 'not in the progression' };
+  const CHORD_KEY_WORDS = { correct: 'found in its bar', present: 'in the progression', absent: 'not in the progression' };
+  const PIANO_KEY_WORDS = { correct: 'the key', present: 'in the key’s scale', absent: 'not in the key’s scale' };
+  const keyTileWords = (pc, state) => ({
+    correct: 'Right key',
+    present: `${keyName(pc)} is in the key’s scale`,
+    absent: `${keyName(pc)} isn’t in the key’s scale`,
+  })[state];
   const WIN_TITLES = ['Perfect ear', 'Sharp ear', 'Nicely heard', 'Just in time'];
+
+  // Piano layout: grid column of each key (white keys span two columns) and its colour.
+  const PIANO = [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13].map((col, pc) => ({
+    pc,
+    col,
+    black: [1, 3, 6, 8, 10].includes(pc),
+  }));
 
   const PLAY_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8L13.2 8z"/></svg>';
   const STOP_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/></svg>';
 
   const $ = (id) => document.getElementById(id);
   const ui = {
+    eyebrow: $('eyebrow'),
+    lede: $('lede'),
+    modeButtons: Array.from(document.querySelectorAll('.mode-btn')),
     board: $('board'),
     beats: Array.from(document.querySelectorAll('.beat')),
     status: $('status'),
@@ -40,7 +86,8 @@
     play: $('play-btn'),
     playIcon: $('play-icon'),
     playLabel: $('play-label'),
-    tonic: $('tonic-btn'),
+    reference: $('ref-btn'),
+    helpBodies: Array.from(document.querySelectorAll('.help-body[data-mode]')),
     stat: {
       played: $('stat-played'),
       winRate: $('stat-winrate'),
@@ -53,79 +100,109 @@
   const reduceMotion = () => Boolean(motionQuery && motionQuery.matches);
   const player = new ChordPlayer();
 
-  let round = null;        // { answer, guesses: [{ degrees, result }], current, status }
+  let mode = loadMode();
+  const rounds = { chords: null, key: null };
+  /*
+   * round: { mode, tonic, answer, guesses, current, status, played }
+   *   chords mode: guesses [{ degrees, result: [marks] }], current = degrees entered so far
+   *   key mode:    guesses [{ key, result: mark }],       current = selected key or null
+   */
+  let round = null;
   let revealing = false;   // true while a submitted row is flipping
   let revealingRow = -1;
-  let hasPlayed = false;   // has this round's progression been played yet?
-  let activePlay = null;   // { kind: 'answer' | 'tonic' | 'row', row }
+  let activePlay = null;   // { kind: 'answer' | 'reference' | 'row', row }
   let flashTimer = 0;
-  let stats = loadStats();
-  const rows = [];         // { line, bars, tiles, playBtn }
-  const keys = new Map();  // degree -> keypad button
-  let answerMeasures = [];
+  const stats = { chords: loadStats(STORAGE.stats.chords), key: loadStats(STORAGE.stats.key) };
+  let rows = [];           // { line, tiles, shakeEl, playBtn }
+  let keyButtons = new Map(); // chords: degree -> button; key: pitch class -> button
+  let answerTiles = [];
 
   // ---- Building the page -----------------------------------------------------
 
+  function el(tag, className, html) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (html !== undefined) node.innerHTML = html;
+    return node;
+  }
+
+  function makeTile(extraClass) {
+    const tile = el('div', 'tile' + (extraClass ? ' ' + extraClass : ''), '<span class="numeral"></span><span class="name"></span>');
+    tile.setAttribute('role', 'img');
+    return tile;
+  }
+
   function buildBoard() {
+    rows.forEach((row) => row.line.remove());
+    rows = [];
     for (let r = 0; r < MAX_GUESSES; r++) {
-      const line = document.createElement('div');
-      line.className = 'line';
+      const line = el('div', 'line');
       line.setAttribute('role', 'group');
       line.setAttribute('aria-label', `Guess ${r + 1}`);
 
-      const bars = document.createElement('div');
-      bars.className = 'bars';
+      let shakeEl;
       const tiles = [];
-      for (let s = 0; s < SLOTS; s++) {
-        const measure = document.createElement('div');
-        measure.className = 'measure';
-        const tile = document.createElement('div');
-        tile.className = 'tile';
-        tile.setAttribute('role', 'img');
-        tile.innerHTML = '<span class="numeral"></span><span class="name"></span>';
-        measure.appendChild(tile);
-        bars.appendChild(measure);
+      if (mode === 'chords') {
+        shakeEl = el('div', 'bars');
+        for (let s = 0; s < SLOTS; s++) {
+          const measure = el('div', 'measure');
+          const tile = makeTile();
+          measure.appendChild(tile);
+          shakeEl.appendChild(measure);
+          tiles.push(tile);
+        }
+      } else {
+        shakeEl = el('div', 'key-slot');
+        const tile = makeTile('key-tile');
+        shakeEl.appendChild(tile);
         tiles.push(tile);
       }
 
-      const playBtn = document.createElement('button');
+      const playBtn = el('button', 'row-play', PLAY_ICON);
       playBtn.type = 'button';
-      playBtn.className = 'row-play';
-      playBtn.setAttribute('aria-label', `Play guess ${r + 1}`);
-      playBtn.innerHTML = PLAY_ICON;
       playBtn.addEventListener('click', () => toggleRow(r));
 
-      line.append(document.createElement('span'), bars, playBtn);
+      line.append(document.createElement('span'), shakeEl, playBtn);
       ui.board.appendChild(line);
-      rows.push({ line, bars, tiles, playBtn });
+      rows.push({ line, tiles, shakeEl, playBtn });
     }
   }
 
   function buildKeypad() {
-    for (const chord of CHORDS) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'key';
-      btn.innerHTML =
-        `<span class="key-num">${chord.degree}</span>` +
-        `<span class="key-numeral">${chord.numeral}</span>` +
-        `<span class="key-name">${chord.name}</span>`;
-      btn.addEventListener('click', () => enter(chord.degree));
-      ui.keypad.appendChild(btn);
-      keys.set(chord.degree, btn);
+    ui.keypad.innerHTML = '';
+    ui.keypad.className = 'keypad keypad-' + mode;
+    keyButtons = new Map();
+
+    if (mode === 'chords') {
+      chordsIn(FIXED_TONIC).forEach((chord) => {
+        const btn = el('button', 'key',
+          `<span class="key-num">${chord.degree}</span>` +
+          `<span class="key-numeral">${chord.numeral}</span>` +
+          `<span class="key-name">${L.prettyName(chord.name)}</span>`);
+        btn.type = 'button';
+        btn.addEventListener('click', () => enterChord(chord.degree));
+        ui.keypad.appendChild(btn);
+        keyButtons.set(chord.degree, btn);
+      });
+    } else {
+      PIANO.forEach(({ pc, col, black }) => {
+        const btn = el('button', `key piano-key ${black ? 'black' : 'white'}`,
+          `<span class="key-numeral">${keyName(pc)}</span>`);
+        btn.type = 'button';
+        btn.style.gridColumn = `${col} / span 2`;
+        btn.style.gridRow = black ? '1' : '2';
+        btn.addEventListener('click', () => selectKey(pc));
+        ui.keypad.appendChild(btn);
+        keyButtons.set(pc, btn);
+      });
     }
-    const del = document.createElement('button');
+
+    const del = el('button', 'key key-wide key-delete', 'Delete');
     del.type = 'button';
-    del.className = 'key key-wide key-delete';
-    del.textContent = 'Delete';
     del.addEventListener('click', erase);
-
-    const sub = document.createElement('button');
+    const sub = el('button', 'key key-wide key-submit', 'Submit');
     sub.type = 'button';
-    sub.className = 'key key-wide key-submit';
-    sub.textContent = 'Submit';
     sub.addEventListener('click', submit);
-
     ui.keypad.append(del, sub);
   }
 
@@ -136,43 +213,71 @@
   function renderBoard() {
     const g = round.guesses.length;
     rows.forEach((row, r) => {
-      const submitted = r < g ? round.guesses[r] : null;
+      const guess = r < g ? round.guesses[r] : null;
       const isActive = r === g && typing();
-      const degrees = submitted ? submitted.degrees : isActive ? round.current : [];
-      const showMarks = submitted && r !== revealingRow;
+      const showMarks = Boolean(guess) && r !== revealingRow;
 
       row.line.classList.toggle('is-active', isActive);
-      row.playBtn.classList.toggle('is-visible', Boolean(submitted) && r !== revealingRow);
-      row.tiles.forEach((tile, s) => {
-        setTile(tile, s, degrees[s], showMarks ? submitted.result[s] : null);
-        tile.classList.toggle('cursor', isActive && s === degrees.length);
-      });
+      row.playBtn.classList.toggle('is-visible', showMarks);
+
+      if (round.mode === 'chords') {
+        const degrees = guess ? guess.degrees : isActive ? round.current : [];
+        row.tiles.forEach((tile, s) => {
+          setChordTile(tile, s, degrees[s], showMarks ? guess.result[s] : null);
+          tile.classList.toggle('cursor', isActive && s === degrees.length);
+        });
+      } else {
+        const pc = guess ? guess.key : isActive ? round.current : null;
+        setKeyTile(row.tiles[0], pc, showMarks ? guess.result : null);
+        row.tiles[0].classList.toggle('cursor', isActive && pc === null);
+      }
     });
   }
 
-  function setTile(tile, slot, degree, state) {
-    const chord = degree ? chordAt(degree) : null;
+  function setChordTile(tile, slot, degree, state) {
+    const chord = degree ? chordsIn(round.tonic)[degree - 1] : null;
     tile.firstChild.textContent = chord ? chord.numeral : '';
-    tile.lastChild.textContent = chord ? chord.name : '';
+    tile.lastChild.textContent = chord ? L.prettyName(chord.name) : '';
     tile.classList.toggle('filled', Boolean(chord));
-    markTile(tile, slot, chord, state);
+    markChordTile(tile, slot, chord, state);
   }
 
-  function markTile(tile, slot, chord, state) {
-    if (state) tile.dataset.state = state;
-    else delete tile.dataset.state;
-    const what = chord ? `${chord.numeral} (${chord.name})` : 'empty';
+  function markChordTile(tile, slot, chord, state) {
+    setState(tile, state);
+    const what = chord ? `${chord.numeral} (${L.prettyName(chord.name)})` : 'empty';
     tile.setAttribute('aria-label', `Bar ${slot + 1}: ${what}${state ? ', ' + TILE_WORDS[state] : ''}`);
   }
 
+  function setKeyTile(tile, pc, state) {
+    const has = pc !== null && pc !== undefined;
+    tile.firstChild.textContent = has ? `${keyName(pc)} major` : '';
+    tile.lastChild.textContent = has && state ? keyTileWords(pc, state) : '';
+    tile.classList.toggle('filled', has);
+    setState(tile, state);
+    tile.setAttribute('aria-label', has ? `${keyName(pc)} major${state ? ': ' + keyTileWords(pc, state) : ''}` : 'No key chosen');
+  }
+
+  function setState(node, state) {
+    if (state) node.dataset.state = state;
+    else delete node.dataset.state;
+  }
+
   function renderKeypad() {
-    const states = L.keyStates(round.guesses.filter((_, i) => i !== revealingRow));
-    keys.forEach((btn, degree) => {
-      const chord = chordAt(degree);
-      const state = states[degree];
-      if (state) btn.dataset.state = state;
-      else delete btn.dataset.state;
-      btn.setAttribute('aria-label', `${chord.numeral}, ${chord.name}${state ? ', ' + KEY_WORDS[state] : ''}`);
+    const done = round.guesses.filter((_, i) => i !== revealingRow);
+    const isKey = round.mode === 'key';
+    const states = isKey ? L.bestMarks(done.map((g) => [g.key, g.result])) : L.keyStates(done);
+    keyButtons.forEach((btn, item) => {
+      const state = states[item];
+      setState(btn, state);
+      if (isKey) {
+        const selected = round.current === item;
+        btn.classList.toggle('selected', selected);
+        btn.setAttribute('aria-pressed', String(selected));
+        btn.setAttribute('aria-label', `${keyName(item)} major${state ? ', ' + PIANO_KEY_WORDS[state] : ''}`);
+      } else {
+        const chord = chordsIn(round.tonic)[item - 1];
+        btn.setAttribute('aria-label', `${chord.numeral}, ${L.prettyName(chord.name)}${state ? ', ' + CHORD_KEY_WORDS[state] : ''}`);
+      }
     });
     ui.keypad.hidden = round.status !== 'playing';
   }
@@ -183,60 +288,73 @@
     ui.play.classList.toggle('is-playing', playingAnswer);
     ui.play.setAttribute('aria-pressed', String(playingAnswer));
     ui.playIcon.innerHTML = playingAnswer ? STOP_ICON : PLAY_ICON;
-    ui.playLabel.textContent = playingAnswer ? 'Stop' : hasPlayed ? 'Play again' : 'Play progression';
-    ui.play.classList.toggle('nudge', !hasPlayed && round.status === 'playing');
-    ui.tonic.classList.toggle('is-playing', kind === 'tonic');
+    ui.playLabel.textContent = playingAnswer ? 'Stop' : round.played ? 'Play again' : 'Play progression';
+    ui.play.classList.toggle('nudge', !round.played && round.status === 'playing');
+    ui.reference.classList.toggle('is-playing', kind === 'reference');
     rows.forEach((row, r) => {
       const on = kind === 'row' && activePlay.row === r;
       row.playBtn.innerHTML = on ? STOP_ICON : PLAY_ICON;
-      row.playBtn.setAttribute('aria-label', `${on ? 'Stop' : 'Play'} guess ${r + 1}`);
+      row.playBtn.setAttribute('aria-label', `${on ? 'Stop' : 'Play'} guess ${r + 1}${round.mode === 'key' ? ' in its key' : ''}`);
     });
   }
 
+  function renderMode() {
+    const copy = COPY[mode];
+    ui.eyebrow.textContent = copy.eyebrow;
+    ui.lede.textContent = copy.lede;
+    ui.reference.innerHTML = copy.reference;
+    ui.reference.title = copy.referenceTitle;
+    ui.modeButtons.forEach((btn) => btn.setAttribute('aria-pressed', String(btn.dataset.mode === mode)));
+    ui.helpBodies.forEach((body) => { body.hidden = body.dataset.mode !== mode; });
+  }
+
   function renderStats() {
-    ui.stat.played.textContent = stats.played;
-    ui.stat.winRate.textContent = stats.played ? Math.round((stats.won / stats.played) * 100) : 0;
-    ui.stat.streak.textContent = stats.streak;
-    ui.stat.best.textContent = stats.best;
+    const s = stats[round.mode];
+    ui.stat.played.textContent = s.played;
+    ui.stat.winRate.textContent = s.played ? Math.round((s.won / s.played) * 100) : 0;
+    ui.stat.streak.textContent = s.streak;
+    ui.stat.best.textContent = s.best;
   }
 
   function renderResult() {
     const finished = round.status !== 'playing';
     ui.result.hidden = !finished;
+    answerTiles = [];
     if (!finished) return;
 
     const won = round.status === 'won';
     const n = round.guesses.length;
+    const key = `${keyName(round.tonic)} major`;
     ui.resultTitle.textContent = won ? WIN_TITLES[n - 1] : 'Out of guesses';
-    ui.resultSub.textContent = won
-      ? `You named it in ${n} of ${MAX_GUESSES} guesses.`
-      : 'This is the progression you heard.';
+    if (round.mode === 'key') {
+      ui.resultSub.textContent = won ? `You named ${key} in ${n} of ${MAX_GUESSES} guesses.` : `The progression was in ${key}.`;
+    } else {
+      ui.resultSub.textContent = won ? `You named it in ${n} of ${MAX_GUESSES} guesses.` : 'This is the progression you heard.';
+    }
 
     ui.answer.innerHTML = '';
-    answerMeasures = round.answer.map((degree, i) => {
-      const chord = chordAt(degree);
-      const measure = document.createElement('div');
-      measure.className = 'measure';
-      const tile = document.createElement('div');
-      tile.className = 'tile filled ' + (won ? '' : 'is-answer');
-      tile.setAttribute('role', 'img');
-      tile.innerHTML = `<span class="numeral">${chord.numeral}</span><span class="name">${chord.name}</span>`;
+    chordsOf(round.tonic, round.answer).forEach((chord, i) => {
+      const measure = el('div', 'measure');
+      const tile = makeTile(won ? 'filled' : 'filled is-answer');
+      tile.firstChild.textContent = chord.numeral;
+      tile.lastChild.textContent = L.prettyName(chord.name);
       if (won) tile.dataset.state = 'correct';
-      tile.setAttribute('aria-label', `Bar ${i + 1}: ${chord.numeral} (${chord.name}), notes ${chord.notes.join(' ')}`);
-      const notes = document.createElement('span');
-      notes.className = 'notes';
-      notes.textContent = chord.notes.join(' ');
-      notes.setAttribute('aria-hidden', 'true');
-      measure.append(tile, notes);
+      const notes = chord.notes.map(L.prettyName).join(' ');
+      tile.setAttribute('aria-label', `Bar ${i + 1}: ${chord.numeral} (${L.prettyName(chord.name)}), notes ${notes}`);
+      const notesEl = el('span', 'notes');
+      notesEl.textContent = notes;
+      notesEl.setAttribute('aria-hidden', 'true');
+      measure.append(tile, notesEl);
       ui.answer.appendChild(measure);
-      return measure;
+      answerTiles.push(tile);
     });
   }
 
   function defaultStatus() {
     if (round.status !== 'playing') return 'Play it again, or move on to the next progression.';
-    if (!hasPlayed) return 'Press Play to hear this round’s four chords.';
-    return `Guess ${round.guesses.length + 1} of ${MAX_GUESSES}. Enter a chord for each bar.`;
+    if (!round.played) return 'Press Play to hear this round’s four chords.';
+    const n = `Guess ${round.guesses.length + 1} of ${MAX_GUESSES}.`;
+    return round.mode === 'key' ? `${n} Pick the key on the keyboard.` : `${n} Enter a chord for each bar.`;
   }
 
   function setStatus(text) {
@@ -262,56 +380,92 @@
 
   // ---- Input ------------------------------------------------------------------
 
-  function enter(degree) {
-    if (!typing() || round.current.length >= SLOTS) return;
+  function enterChord(degree) {
+    if (!typing() || round.mode !== 'chords' || round.current.length >= SLOTS) return;
     round.current.push(degree);
     renderBoard();
     animate(rows[round.guesses.length].tiles[round.current.length - 1], 'pop');
   }
 
+  function selectKey(pc) {
+    if (!typing() || round.mode !== 'key') return;
+    round.current = pc;
+    renderBoard();
+    renderKeypad();
+    animate(rows[round.guesses.length].tiles[0], 'pop');
+  }
+
+  function shiftKey(step) {
+    if (!typing() || round.mode !== 'key' || round.current === null) return;
+    selectKey(mod12(round.current + step));
+  }
+
   function erase() {
-    if (!typing() || round.current.length === 0) return;
-    round.current.pop();
+    if (!typing()) return;
+    if (round.mode === 'chords') {
+      if (round.current.length === 0) return;
+      round.current.pop();
+    } else {
+      if (round.current === null) return;
+      round.current = null;
+      renderKeypad();
+    }
     renderBoard();
   }
 
   function submit() {
     if (!typing()) return;
     const r = round.guesses.length;
-    if (round.current.length < SLOTS) {
-      animate(rows[r].bars, 'shake');
-      flash(`Fill all ${SLOTS} bars before you submit.`);
-      return;
+    let guess;
+    if (round.mode === 'chords') {
+      if (round.current.length < SLOTS) {
+        animate(rows[r].shakeEl, 'shake');
+        flash(`Fill all ${SLOTS} bars before you submit.`);
+        return;
+      }
+      const degrees = round.current.slice();
+      guess = { degrees, result: L.scoreGuess(degrees, round.answer) };
+      round.current = [];
+    } else {
+      if (round.current === null) {
+        animate(rows[r].shakeEl, 'shake');
+        flash('Pick a key on the keyboard before you submit.');
+        return;
+      }
+      guess = { key: round.current, result: L.scoreKeyGuess(round.current, round.tonic) };
+      round.current = null;
     }
 
-    const degrees = round.current.slice();
-    const result = L.scoreGuess(degrees, round.answer);
-    round.guesses.push({ degrees, result });
-    round.current = [];
+    round.guesses.push(guess);
     revealing = true;
     revealingRow = r;
     renderBoard();
+    renderKeypad();
 
-    reveal(r, degrees, result).then(() => {
+    const rnd = round;
+    reveal(r, guess).then(() => {
       revealing = false;
       revealingRow = -1;
-      const won = L.isSolved(result);
-      if (won) round.status = 'won';
-      else if (round.guesses.length >= MAX_GUESSES) round.status = 'lost';
+      const won = rnd.mode === 'key' ? guess.result === 'correct' : L.isSolved(guess.result);
+      if (won) rnd.status = 'won';
+      else if (rnd.guesses.length >= MAX_GUESSES) rnd.status = 'lost';
 
-      ui.announce.textContent = `Guess ${r + 1}: ` + degrees
-        .map((d, i) => `${chordAt(d).numeral} ${TILE_WORDS[result[i]]}`)
-        .join(', ') + '.';
+      ui.announce.textContent = `Guess ${r + 1}: ` + (rnd.mode === 'key'
+        ? `${keyName(guess.key)} major, ${keyTileWords(guess.key, guess.result)}.`
+        : guess.degrees.map((d, i) => `${chordsIn(rnd.tonic)[d - 1].numeral} ${TILE_WORDS[guess.result[i]]}`).join(', ') + '.');
 
-      if (round.status !== 'playing') recordResult(won, round.guesses.length);
+      if (rnd.status !== 'playing') recordResult(rnd.mode, won, rnd.guesses.length);
       renderAll();
       if (won) celebrate(r);
     });
   }
 
-  function reveal(r, degrees, result) {
+  function reveal(r, guess) {
     const tiles = rows[r].tiles;
-    const mark = (s) => markTile(tiles[s], s, chordAt(degrees[s]), result[s]);
+    const mark = (s) => {
+      if (round.mode === 'key') setKeyTile(tiles[0], guess.key, guess.result);
+      else markChordTile(tiles[s], s, chordsIn(round.tonic)[guess.degrees[s] - 1], guess.result[s]);
+    };
     if (reduceMotion()) {
       tiles.forEach((_, s) => mark(s));
       return Promise.resolve();
@@ -330,7 +484,7 @@
           tile.style.animationDelay = '';
         });
         resolve();
-      }, (SLOTS - 1) * STEP + FLIP + 30);
+      }, (tiles.length - 1) * STEP + FLIP + 30);
     });
   }
 
@@ -342,27 +496,27 @@
     });
   }
 
-  function animate(el, className, done) {
+  function animate(node, className, done) {
     if (reduceMotion()) return;
-    el.classList.remove(className);
-    void el.offsetWidth; // restart the animation if it is already applied
-    el.classList.add(className);
-    el.addEventListener('animationend', function end(e) {
-      if (e.target !== el) return; // ignore animations of child elements
-      el.classList.remove(className);
-      el.removeEventListener('animationend', end);
+    node.classList.remove(className);
+    void node.offsetWidth; // restart the animation if it is already applied
+    node.classList.add(className);
+    node.addEventListener('animationend', function end(e) {
+      if (e.target !== node) return; // ignore animations of child elements
+      node.classList.remove(className);
+      node.removeEventListener('animationend', end);
       if (done) done();
     });
   }
 
   // ---- Playback ----------------------------------------------------------------
 
-  function startPlayback(kind, degrees, { row, chordSeconds = CHORD_SECONDS } = {}) {
+  function startPlayback(kind, chords, { row, chordSeconds = CHORD_SECONDS } = {}) {
     const token = { kind, row };
     activePlay = token;
     clearHighlights();
     renderTransport();
-    player.playSequence(degrees.map(chordAt), {
+    player.playSequence(chords, {
       chordSeconds,
       onStep: (i) => { if (activePlay === token) highlight(token, i); },
       onEnd: () => { if (activePlay === token) endPlayback(); },
@@ -386,64 +540,96 @@
 
   function toggleAnswer() {
     if (activePlay && activePlay.kind === 'answer') return stopPlayback();
-    const first = !hasPlayed;
-    hasPlayed = true;
-    startPlayback('answer', round.answer);
+    const first = !round.played;
+    round.played = true;
+    startPlayback('answer', chordsOf(round.tonic, round.answer));
     if (first && round.status === 'playing') setStatus();
   }
 
+  // Chords mode: hear the guessed chords. Key mode: hear the progression in the guessed key.
   function toggleRow(r) {
     if (r >= round.guesses.length || r === revealingRow) return;
     if (activePlay && activePlay.kind === 'row' && activePlay.row === r) return stopPlayback();
-    startPlayback('row', round.guesses[r].degrees, { row: r });
+    const guess = round.guesses[r];
+    const chords = round.mode === 'key' ? chordsOf(guess.key, round.answer) : chordsOf(round.tonic, guess.degrees);
+    startPlayback('row', chords, { row: r });
   }
 
-  function playTonic() {
-    startPlayback('tonic', [1], { chordSeconds: 1.8 });
+  // Chords mode: the I chord of the key. Key mode: a reference C, since the I chord would give the key away.
+  function playReference() {
+    const chord = round.mode === 'key' ? REFERENCE_C : chordsIn(round.tonic)[0];
+    startPlayback('reference', [chord], { chordSeconds: 1.8 });
   }
 
   function highlight(play, i) {
     clearHighlights();
-    if (play.kind === 'tonic') return;
+    if (play.kind === 'reference') return;
     ui.beats[i].classList.add('on');
-    if (play.kind === 'row') rows[play.row].tiles[i].classList.add('sounding');
-    if (play.kind === 'answer' && !ui.result.hidden && answerMeasures[i]) {
-      answerMeasures[i].firstChild.classList.add('sounding');
+    if (play.kind === 'row') {
+      const tiles = rows[play.row].tiles;
+      (tiles[i] || tiles[0]).classList.add('sounding');
     }
+    if (play.kind === 'answer' && answerTiles[i]) answerTiles[i].classList.add('sounding');
   }
 
   function clearHighlights() {
     ui.beats.forEach((b) => b.classList.remove('on'));
-    document.querySelectorAll('.sounding').forEach((el) => el.classList.remove('sounding'));
+    document.querySelectorAll('.sounding').forEach((node) => node.classList.remove('sounding'));
   }
 
-  // ---- Rounds and stats -----------------------------------------------------------
+  // ---- Modes and rounds -------------------------------------------------------------
 
-  function newRound() {
-    stopPlayback();
-    const previous = round && round.answer.join();
+  function makeRound(m, previous) {
+    let tonic;
     let answer;
     do {
-      answer = L.randomProgression({ poolSize: CHORDS.length, allowAdjacentRepeats: ALLOW_BACK_TO_BACK });
-    } while (answer.join() === previous);
-    round = { answer, guesses: [], current: [], status: 'playing' };
-    revealing = false;
-    revealingRow = -1;
-    hasPlayed = false;
+      tonic = m === 'key' ? L.randomKey() : FIXED_TONIC;
+      answer = L.randomProgression({
+        poolSize: POOL_SIZE,
+        allowAdjacentRepeats: ALLOW_BACK_TO_BACK,
+        startOnTonic: m === 'key' && KEY_MODE_STARTS_ON_I,
+      });
+    } while (previous && (m === 'key' ? tonic === previous.tonic : answer.join() === previous.answer.join()));
+    return { mode: m, tonic, answer, guesses: [], current: m === 'key' ? null : [], status: 'playing', played: false };
+  }
+
+  function showRound(r) {
+    round = r;
+    rounds[r.mode] = r;
     ui.announce.textContent = '';
     renderAll();
   }
 
   function nextRound() {
     if (round.status === 'playing' || revealing) return;
-    newRound();
+    stopPlayback();
+    showRound(makeRound(mode, round));
     toggleAnswer(); // the click or key press counts as the gesture that allows audio
   }
 
-  function loadStats() {
+  function setMode(m) {
+    if (m === mode || !MODES.includes(m) || revealing) return;
+    stopPlayback();
+    mode = m;
+    try { localStorage.setItem(STORAGE.mode, m); } catch (e) { /* not remembered */ }
+    renderMode();
+    buildBoard();
+    buildKeypad();
+    showRound(rounds[m] || makeRound(m, null));
+  }
+
+  function loadMode() {
+    try {
+      const saved = localStorage.getItem(STORAGE.mode);
+      if (MODES.includes(saved)) return saved;
+    } catch (e) { /* storage unavailable */ }
+    return 'chords';
+  }
+
+  function loadStats(storageKey) {
     const base = { played: 0, won: 0, streak: 0, best: 0, dist: [0, 0, 0, 0] };
     try {
-      const saved = JSON.parse(localStorage.getItem(STATS_KEY) || 'null');
+      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
       if (saved && typeof saved === 'object') {
         for (const k of ['played', 'won', 'streak', 'best']) {
           if (Number.isInteger(saved[k]) && saved[k] >= 0) base[k] = saved[k];
@@ -456,42 +642,53 @@
     return base;
   }
 
-  function saveStats() {
-    try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch (e) { /* not persisted */ }
-  }
-
-  function recordResult(won, guessCount) {
-    stats.played += 1;
+  function recordResult(m, won, guessCount) {
+    const s = stats[m];
+    s.played += 1;
     if (won) {
-      stats.won += 1;
-      stats.streak += 1;
-      stats.best = Math.max(stats.best, stats.streak);
-      stats.dist[guessCount - 1] += 1;
+      s.won += 1;
+      s.streak += 1;
+      s.best = Math.max(s.best, s.streak);
+      s.dist[guessCount - 1] += 1;
     } else {
-      stats.streak = 0;
+      s.streak = 0;
     }
-    saveStats();
+    try { localStorage.setItem(STORAGE.stats[m], JSON.stringify(s)); } catch (e) { /* not persisted */ }
   }
 
   // Accept a round saved by a live-update snapshot only if it is well formed.
-  function restoreRound(saved) {
-    const isDegree = (d) => Number.isInteger(d) && d >= 1 && d <= CHORDS.length;
-    if (!saved || !Array.isArray(saved.answer) || saved.answer.length !== SLOTS || !saved.answer.every(isDegree)) return null;
+  function restoreRound(saved, m) {
+    const isDegree = (d) => Number.isInteger(d) && d >= 1 && d <= POOL_SIZE;
+    const isPc = (pc) => Number.isInteger(pc) && pc >= 0 && pc < 12;
+    if (!saved || saved.mode !== m || !isPc(saved.tonic)) return null;
+    if (!Array.isArray(saved.answer) || saved.answer.length !== SLOTS || !saved.answer.every(isDegree)) return null;
     const guesses = Array.isArray(saved.guesses) ? saved.guesses.slice(0, MAX_GUESSES) : [];
-    if (!guesses.every((g) => g && Array.isArray(g.degrees) && g.degrees.length === SLOTS && g.degrees.every(isDegree))) return null;
-    const current = Array.isArray(saved.current) ? saved.current.filter(isDegree).slice(0, SLOTS) : [];
-    const scored = guesses.map((g) => ({ degrees: g.degrees.slice(), result: L.scoreGuess(g.degrees, saved.answer) }));
+    let scored;
+    let current;
+    let solved;
+    if (m === 'chords') {
+      if (!guesses.every((g) => g && Array.isArray(g.degrees) && g.degrees.length === SLOTS && g.degrees.every(isDegree))) return null;
+      scored = guesses.map((g) => ({ degrees: g.degrees.slice(), result: L.scoreGuess(g.degrees, saved.answer) }));
+      current = Array.isArray(saved.current) ? saved.current.filter(isDegree).slice(0, SLOTS) : [];
+      solved = (g) => L.isSolved(g.result);
+    } else {
+      if (!guesses.every((g) => g && isPc(g.key))) return null;
+      scored = guesses.map((g) => ({ key: g.key, result: L.scoreKeyGuess(g.key, saved.tonic) }));
+      current = isPc(saved.current) ? saved.current : null;
+      solved = (g) => g.result === 'correct';
+    }
     const last = scored[scored.length - 1];
-    const status = last && L.isSolved(last.result) ? 'won' : scored.length >= MAX_GUESSES ? 'lost' : 'playing';
-    return { answer: saved.answer.slice(), guesses: scored, current, status };
+    const status = last && solved(last) ? 'won' : scored.length >= MAX_GUESSES ? 'lost' : 'playing';
+    return { mode: m, tonic: saved.tonic, answer: saved.answer.slice(), guesses: scored, current, status, played: true };
   }
 
   // ---- Events --------------------------------------------------------------------
 
   function bindEvents() {
     ui.play.addEventListener('click', toggleAnswer);
-    ui.tonic.addEventListener('click', playTonic);
+    ui.reference.addEventListener('click', playReference);
     ui.next.addEventListener('click', nextRound);
+    ui.modeButtons.forEach((btn) => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
 
     // Mouse clicks shouldn't leave focus on a button, or a later Enter would press it again.
     document.addEventListener('mousedown', (e) => {
@@ -502,17 +699,9 @@
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const onControl = e.target instanceof Element && e.target.closest('button, summary, a, input, select, textarea');
       const k = e.key;
+      const keyMode = round.mode === 'key';
 
-      if (/^[1-9]$/.test(k)) {
-        const degree = Number(k);
-        if (degree <= CHORDS.length) {
-          e.preventDefault();
-          enter(degree);
-        }
-      } else if (k === 'Backspace' || k === 'Delete') {
-        e.preventDefault();
-        erase();
-      } else if (k === 'Enter') {
+      if (k === 'Enter') {
         if (onControl || e.repeat) return; // let a focused button handle its own Enter
         e.preventDefault();
         if (round.status === 'playing') submit();
@@ -521,9 +710,27 @@
         if (onControl || e.repeat) return;
         e.preventDefault();
         toggleAnswer();
-      } else if (k === 't' || k === 'T') {
+      } else if (k === 'Backspace' || k === 'Delete') {
         e.preventDefault();
-        playTonic();
+        erase();
+      } else if (!keyMode && /^[1-9]$/.test(k)) {
+        const degree = Number(k);
+        if (degree <= POOL_SIZE) {
+          e.preventDefault();
+          enterChord(degree);
+        }
+      } else if (keyMode && /^[a-g]$/i.test(k)) {
+        e.preventDefault();
+        selectKey(L.pitchClass(k.toUpperCase()));
+      } else if (keyMode && (k === 'ArrowRight' || k === '#')) {
+        e.preventDefault();
+        shiftKey(1);
+      } else if (keyMode && k === 'ArrowLeft') {
+        e.preventDefault();
+        shiftKey(-1);
+      } else if (/^[tr]$/i.test(k)) {
+        e.preventDefault();
+        playReference();
       }
     });
   }
@@ -531,22 +738,19 @@
   // ---- Start ------------------------------------------------------------------------
 
   function start(data) {
+    const saved = (data && data.rounds) || {};
+    MODES.forEach((m) => { rounds[m] = restoreRound(saved[m], m); });
+    if (data && MODES.includes(data.mode)) mode = data.mode;
+    renderMode();
     buildBoard();
     buildKeypad();
     bindEvents();
-    const restored = restoreRound(data && data.round);
-    if (restored) {
-      round = restored;
-      hasPlayed = true;
-      renderAll();
-    } else {
-      newRound();
-    }
+    showRound(rounds[mode] || makeRound(mode, null));
   }
 
-  // When the page runs as a claude.ai artifact, keep the round in progress across live updates.
+  // When the page runs as a claude.ai artifact, keep rounds in progress across live updates.
   const hot = window.claude && window.claude.hot;
-  if (hot && typeof hot.snapshot === 'function') hot.snapshot(() => ({ round }));
+  if (hot && typeof hot.snapshot === 'function') hot.snapshot(() => ({ mode, rounds }));
   if (hot && typeof hot.ready === 'function') hot.ready(start);
   else start((hot && hot.data) || {});
 })();

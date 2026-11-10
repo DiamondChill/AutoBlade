@@ -1,6 +1,14 @@
 # Four Bars
 
-A Wordle-style ear-training game for chord progressions.
+A Wordle-style ear-training game for chord progressions, with two modes:
+
+- **Name the chords**: hear four chords in C major and name them by Roman numeral.
+- **Name the key**: hear four chords in a random major key and name the key.
+
+Switch modes with the buttons under the title. Each mode keeps its own round in progress and its own
+stats.
+
+## Name the chords
 
 Each round, a random four-chord progression plays in C major. Every chord comes from the first six
 degrees of the scale:
@@ -40,6 +48,35 @@ past guess to compare it with the answer.
 | `Space`       | Play or stop           |
 | `T`           | Play the I chord       |
 
+## Name the key
+
+Each round, a random progression from the same six chords (I ii iii IV V vi) plays in one of the 12
+major keys. The first chord is always the I chord, so the key is clear. Pick the key on the one-octave
+piano and submit; you get four guesses:
+
+- **Green**: the right key.
+- **Yellow**: wrong key, but that note is in the real key's major scale (e.g. guessing G when the key is
+  C major, since G is in C major).
+- **Gray**: wrong key, and that note isn't in the real key's scale (e.g. F♯ when the key is C major).
+
+Notes are compared by sound, so F♯ and G♭ count as the same note. Four guesses is always enough with
+careful deduction alone (checked by brute force), so a good ear just gets you there sooner.
+
+**Hear a C** plays a reference pitch, so you can name the key by relative pitch. The play button beside
+a past guess plays the progression in the key you guessed, so you can compare it with the real one.
+When the round ends, the answer shows the four chords and their notes in that key.
+
+### Keyboard
+
+| Key           | Action                                       |
+| ------------- | -------------------------------------------- |
+| `A`–`G`       | Pick that key                                |
+| `←` / `→`     | Move the key down / up a semitone (E then ← is E♭) |
+| `Backspace`   | Clear the key                                |
+| `Enter`       | Submit / next round                          |
+| `Space`       | Play or stop                                 |
+| `R`           | Play the reference C                         |
+
 ## Running it
 
 It's a static page with no build step or dependencies. Open `index.html` in a browser, or serve the
@@ -53,9 +90,9 @@ Sound is synthesised with the Web Audio API, so browsers only start it after you
 
 ## Tests
 
-The game rules (chord spelling, random progressions, Wordle scoring, keypad colours, voicing) live in
-`js/logic.js`, which has no DOM or audio code, and are tested with Node's built-in test runner
-(Node 18+):
+The game rules (chord spelling, random progressions and keys, both scoring rules, keypad colours,
+voicing) live in `js/logic.js`, which has no DOM or audio code, and are tested with Node's built-in
+test runner (Node 18+):
 
 ```sh
 npm test
@@ -69,17 +106,19 @@ npm test
 | `style.css`     | Styles, light and dark themes                                  |
 | `js/logic.js`   | Pure game rules (works in the browser and in Node)             |
 | `js/audio.js`   | Web Audio synth that plays the chords                          |
-| `js/game.js`    | Board, keypad, input, round flow and stats                     |
+| `js/game.js`    | Board, keypads, input, round flow, modes and stats             |
 | `test/`         | Unit tests for `js/logic.js`                                   |
 
 ## Settings
 
 At the top of `js/game.js`:
 
-- `KEY`: the major key the chords come from (`'C'`). Any major key works, e.g. `'G'`, `'Eb'`, `'F#'`;
-  chord names are spelled for that key. The help text in `index.html` lists the C major chords, so
-  update it if you change the key.
+- `CHORDS_MODE_KEY`: the major key used by Name the chords (`'C'`). Any major key works, e.g. `'G'`,
+  `'Eb'`, `'F#'`; chord names are spelled for that key. The help text in `index.html` lists the C major
+  chords, so update it if you change the key.
 - `ALLOW_BACK_TO_BACK`: set to `true` to let the same chord play in two bars in a row.
+- `KEY_MODE_STARTS_ON_I`: set to `false` to let Name the key progressions start on any chord. Some
+  progressions then fit two keys (I V vi iii in C is IV I ii vi in G), so the key can be ambiguous.
 - `CHORD_SECONDS`: how long each chord lasts on playback (`1.3`).
 
-Win/loss stats are saved in the browser's `localStorage`.
+Win/loss stats (per mode) and the last mode you played are saved in the browser's `localStorage`.
